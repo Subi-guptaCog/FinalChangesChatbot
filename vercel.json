@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api" },
+    { "source": "/health", "destination": "/api" },
+    { "source": "/chat", "destination": "/api" },
+    { "source": "/((?!assets|favicon.ico|manifest.json|api).*|.*\\.html$)", "destination": "/index.html" }
+  ]
+}
