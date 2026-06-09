@@ -206,12 +206,24 @@ export default function App() {
         }
         
         let status: TaskStatus = TaskStatus.NEW;
-        const lowS = statusStr.toLowerCase().replace(/\s+/g, "");
-        if (lowS === "inprogress" || lowS === "progress" || lowS === "active") status = TaskStatus.IN_PROGRESS;
-        if (lowS === "codecompleted") status = TaskStatus.CODE_COMPLETED;
-        if (lowS === "waitingforqa" || lowS === "qa") status = TaskStatus.WAITING_FOR_QA;
-        if (lowS === "ready") status = TaskStatus.READY;
-        if (lowS === "done" || lowS === "completed" || lowS === "finish") status = TaskStatus.DONE;
+        const lowS = statusStr.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (lowS === "inprogress" || lowS === "progress" || lowS === "active") {
+          status = TaskStatus.IN_PROGRESS;
+        } else if (lowS === "pendingbusiness" || lowS === "business") {
+          status = TaskStatus.PENDING_BUSINESS;
+        } else if (lowS === "pendingdev" || lowS === "dev" || lowS === "codecompleted") {
+          status = TaskStatus.PENDING_DEV;
+        } else if (lowS === "waitingforqa" || lowS === "qa") {
+          status = TaskStatus.WAITING_FOR_QA;
+        } else if (lowS === "ready") {
+          status = TaskStatus.READY;
+        } else if (lowS === "done" || lowS === "completed" || lowS === "finish") {
+          status = TaskStatus.DONE;
+        } else if (lowS === "duplicate") {
+          status = TaskStatus.DUPLICATE;
+        } else if (lowS === "new") {
+          status = TaskStatus.NEW;
+        }
 
         let category = "CSV Import";
         if (categoryIndex !== -1 && values[categoryIndex]) {
@@ -844,11 +856,13 @@ export default function App() {
                   >
                     <option value="ALL" className="bg-[#090B0E]">ALL</option>
                     <option value={TaskStatus.NEW} className="bg-[#090B0E]">New</option>
-                    <option value={TaskStatus.IN_PROGRESS} className="bg-[#090B0E]">In progress</option>
-                    <option value={TaskStatus.CODE_COMPLETED} className="bg-[#090B0E]">code completed</option>
-                    <option value={TaskStatus.WAITING_FOR_QA} className="bg-[#090B0E]">waiting for QA</option>
-                    <option value={TaskStatus.READY} className="bg-[#090B0E]">ready</option>
-                    <option value={TaskStatus.DONE} className="bg-[#090B0E]">done</option>
+                    <option value={TaskStatus.PENDING_BUSINESS} className="bg-[#090B0E]">Pending Business</option>
+                    <option value={TaskStatus.PENDING_DEV} className="bg-[#090B0E]">Pending Dev</option>
+                    <option value={TaskStatus.IN_PROGRESS} className="bg-[#090B0E]">In Progress</option>
+                    <option value={TaskStatus.WAITING_FOR_QA} className="bg-[#090B0E]">Waiting for QA</option>
+                    <option value={TaskStatus.READY} className="bg-[#090B0E]">Ready</option>
+                    <option value={TaskStatus.DONE} className="bg-[#090B0E]">Done</option>
+                    <option value={TaskStatus.DUPLICATE} className="bg-[#090B0E]">Duplicate</option>
                   </select>
                 </div>
 
