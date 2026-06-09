@@ -128,11 +128,13 @@ export default function TaskForm({ taskToEdit, onSubmit, onCancel }: TaskFormPro
                 className="w-full px-3 py-2 rounded-lg bg-[#090B0E] border border-[#2D3139] text-sm text-[#E0E0E0] focus:border-[#3B82F6] outline-none transition-all"
               >
                 <option value={TaskStatus.NEW}>New</option>
-                <option value={TaskStatus.IN_PROGRESS}>In progress</option>
-                <option value={TaskStatus.CODE_COMPLETED}>code completed</option>
-                <option value={TaskStatus.WAITING_FOR_QA}>waiting for QA</option>
-                <option value={TaskStatus.READY}>ready</option>
-                <option value={TaskStatus.DONE}>done</option>
+                <option value={TaskStatus.PENDING_BUSINESS}>Pending Business</option>
+                <option value={TaskStatus.PENDING_DEV}>Pending Dev</option>
+                <option value={TaskStatus.IN_PROGRESS}>In Progress</option>
+                <option value={TaskStatus.WAITING_FOR_QA}>Waiting for QA</option>
+                <option value={TaskStatus.READY}>Ready</option>
+                <option value={TaskStatus.DONE}>Done</option>
+                <option value={TaskStatus.DUPLICATE}>Duplicate</option>
               </select>
             </div>
           </div>
