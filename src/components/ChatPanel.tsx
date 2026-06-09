@@ -8,6 +8,7 @@ interface ChatPanelProps {
   onSendMessage: (text: string) => void;
   isPending: boolean;
   onUploadCsvFile: (text: string, fileName?: string) => void;
+  apiError?: string | null;
 }
 
 const suggestions = [
@@ -17,7 +18,7 @@ const suggestions = [
   { text: "📅 Organize my tasks based on upcoming due dates", label: "Sort Schedule" },
 ];
 
-export default function ChatPanel({ messages, onSendMessage, isPending, onUploadCsvFile }: ChatPanelProps) {
+export default function ChatPanel({ messages, onSendMessage, isPending, onUploadCsvFile, apiError }: ChatPanelProps) {
   const [inputText, setInputText] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -95,6 +96,24 @@ export default function ChatPanel({ messages, onSendMessage, isPending, onUpload
           Agent Proxy
         </div>
       </div>
+
+      <AnimatePresence>
+        {apiError && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="bg-rose-500/10 border-b border-rose-500/20 p-3 px-4 flex items-start gap-2.5 text-xs text-rose-400 font-sans overflow-hidden"
+          >
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="flex-1 space-y-1">
+              <span className="font-bold uppercase tracking-wider block text-[10px] text-rose-300">Google Gemini API Warning</span>
+              <p className="leading-relaxed text-rose-200/90 text-[11px]">{apiError}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Messages Scroll Sandbox */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[#090B0E]/30">

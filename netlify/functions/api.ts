@@ -1,5 +1,11 @@
 import { Handler } from "@netlify/functions";
 import { GoogleGenAI, Type } from "@google/genai";
+import dns from "dns";
+
+// Resolve common Node.js fetch failed/DNS resolution issues by prioritizing IPv4
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 function getEffectiveApiKey(): string | undefined {
   const envKey = process.env.GEMINI_API_KEY;
@@ -361,6 +367,13 @@ export const handler: Handler = async (event) => {
         } else {
           errorString = `Your configured GEMINI_API_KEY (starts with '${currentKey.substring(0, 6)}') is invalid or lacks permissions. Please configure a valid Gemini API Key starting with 'AIzaSy'`;
         }
+      } else if (
+        errorString.includes("API key expired") ||
+        errorString.includes("API_KEY_INVALID") ||
+        errorString.includes("renew the API key") ||
+        errorString.includes("expired")
+      ) {
+        errorString = "Your configured GEMINI_API_KEY has expired. Please open the Settings menu in Google AI Studio, locate the GEMINI_API_KEY secret, and renew or replace it with a fresh active API key starting with 'AIzaSy' to resume live online AI planning";
       }
 
       fallback.reply = `[⚠️ Gemini API Offline] ${errorString}.\n\nUsing local backup:\n${fallback.reply}`;

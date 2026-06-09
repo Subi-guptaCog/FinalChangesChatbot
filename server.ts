@@ -4,13 +4,20 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import fs from "fs";
+import dns from "dns";
+
+// Resolve common Node.js fetch failed/DNS resolution issues by prioritizing IPv4
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 dotenv.config({ override: true });
 
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 function getEffectiveApiKey(): string | undefined {
   const envKey = process.env.GEMINI_API_KEY;
@@ -20,21 +27,17 @@ function getEffectiveApiKey(): string | undefined {
   return envKey;
 }
 
-// Lazy-initialize Gemini client
-let aiInstance: GoogleGenAI | null = null;
+// On-demand Gemini client creation to ensure any API key changes take effect immediately
 function getGeminiClient(): GoogleGenAI {
-  if (!aiInstance) {
-    const key = getEffectiveApiKey() || "";
-    aiInstance = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
+  const key = getEffectiveApiKey() || "";
+  return new GoogleGenAI({
+    apiKey: key,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
       },
-    });
-  }
-  return aiInstance;
+    },
+  });
 }
 
 // Check api health status
@@ -394,6 +397,13 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
         } else {
           errorString = `Your configured GEMINI_API_KEY (starts with '${currentKey.substring(0, 6)}') is invalid or lacks permissions. Please configure a valid Gemini API Key starting with 'AIzaSy'`;
         }
+      } else if (
+        errorString.includes("API key expired") ||
+        errorString.includes("API_KEY_INVALID") ||
+        errorString.includes("renew the API key") ||
+        errorString.includes("expired")
+      ) {
+        errorString = "Your configured GEMINI_API_KEY has expired. Please open the Settings menu in Google AI Studio, locate the GEMINI_API_KEY secret, and renew or replace it with a fresh active API key starting with 'AIzaSy' to resume live online AI planning";
       }
 
       fallback.reply = `[⚠️ Gemini API Offline] ${errorString}.\n\nI processed your request using the local backup parser:\n${fallback.reply}`;
@@ -410,8 +420,9 @@ export default app;
 
 // Setup Vite Dev Server / Static Hosting
 async function startServer() {
+  let vite: any = null;
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+    vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
@@ -425,9 +436,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`[TaskChatbot Server] Running on http://localhost:${PORT}`);
   });
+
+  if (process.env.NODE_ENV !== "production" && vite) {
+    httpServer.on("upgrade", (req, socket, head) => {
+      vite.ws.handleUpgrade(req, socket, head);
+    });
+  }
 }
 
 // Do not occupy/start the standalone listener in serverless environments where the app is loaded as a library.

@@ -57,6 +57,23 @@ export default function App() {
   const [terminalLogs, setTerminalLogs] = useState<string[]>(INITIAL_LOGS);
   const [activeSidebar, setActiveSidebar] = useState<"chat" | "tasks" | "settings" | "docker">("chat");
   const [isPending, setIsPending] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/health")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) => {
+        if (!data.hasApiKey) {
+          setApiError("GEMINI_API_KEY is not configured or is a placeholder. Please open the Settings menu in Google AI Studio, locate the workspace secrets configuration, and enter a valid Gemini API Key starting with 'AIzaSy' to unlock online AI planning and automated task scheduling.");
+        }
+      })
+      .catch((err) => {
+        console.error("Health check failed on initialization:", err);
+      });
+  }, []);
 
   const [user, setUser] = useState<UserProfile | null>(() => {
     const saved = localStorage.getItem("high_density_user");
@@ -296,13 +313,29 @@ export default function App() {
     setIsPending(true);
 
     try {
+      // Prune history and tasks to keep payload tight and avoid 413 Payload Too Large errors
+      const prunedHistory = updatedMessages.slice(-8).map(m => ({
+        sender: m.sender,
+        text: m.text ? (m.text.length > 1000 ? m.text.substring(0, 1000) + "..." : m.text) : ""
+      }));
+
+      const prunedTasks = tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        description: t.description ? (t.description.length > 200 ? t.description.substring(0, 200) + "..." : t.description) : "",
+        status: t.status,
+        priority: t.priority,
+        category: t.category,
+        dueDate: t.dueDate
+      }));
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
-          history: updatedMessages.slice(-8), // Send last 8 chats for context
-          currentTasks: tasks
+          history: prunedHistory,
+          currentTasks: prunedTasks
         })
       });
 
@@ -330,6 +363,14 @@ export default function App() {
       setMessages((prev) => [...prev, assistantMsg]);
       addLog(`[GEMINI] Assistant reply received. Status: 200 OK`);
 
+      if (data.reply && data.reply.includes("[⚠️ Gemini API Offline]")) {
+        const parts = data.reply.split("[⚠️ Gemini API Offline]");
+        const errDetail = parts[1]?.split(".")[0]?.trim() || "Gemini API experienced a configuration or key expiration issue.";
+        setApiError(`Gemini is offline: ${errDetail}`);
+      } else {
+        setApiError(null);
+      }
+
       // Handle server-directed task modifications
       if (data.actions && Array.isArray(data.actions)) {
         data.actions.forEach((action: ChatAction) => {
@@ -339,7 +380,9 @@ export default function App() {
 
     } catch (err: any) {
       console.error(err);
-      addLog(`[ALERT] Failed server proxy response: ${err.message || err}`);
+      const errString = err.message || JSON.stringify(err);
+      addLog(`[ALERT] Failed server proxy response: ${errString}`);
+      setApiError(`Failed server response: ${errString}`);
       
       const assistantErrorMsg: ChatMessage = {
         id: "msg-" + (Date.now() + 1),
@@ -724,6 +767,7 @@ export default function App() {
               onSendMessage={handleSendMessage} 
               isPending={isPending} 
               onUploadCsvFile={processCsvContent}
+              apiError={apiError}
             />
           </div>
 

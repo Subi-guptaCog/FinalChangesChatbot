@@ -1,11 +1,18 @@
 import express from "express";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import dns from "dns";
+
+// Resolve common Node.js fetch failed/DNS resolution issues by prioritizing IPv4
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 dotenv.config({ override: true });
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 function getEffectiveApiKey(): string | undefined {
   const envKey = process.env.GEMINI_API_KEY;
@@ -15,21 +22,17 @@ function getEffectiveApiKey(): string | undefined {
   return envKey;
 }
 
-// Lazy-initialize Gemini client
-let aiInstance: GoogleGenAI | null = null;
+// On-demand Gemini client creation to ensure any API key changes take effect immediately
 function getGeminiClient(): GoogleGenAI {
-  if (!aiInstance) {
-    const key = getEffectiveApiKey() || "";
-    aiInstance = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
+  const key = getEffectiveApiKey() || "";
+  return new GoogleGenAI({
+    apiKey: key,
+    httpOptions: {
+      headers: {
+        "User-Agent": "aistudio-build",
       },
-    });
-  }
-  return aiInstance;
+    },
+  });
 }
 
 // Local rule-based task actions parsing engine for offline fallback
@@ -325,6 +328,13 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
         } else {
           errorString = `Your configured GEMINI_API_KEY (starts with '${currentKey.substring(0, 6)}') is invalid or lacks permissions. Please configure a valid Gemini API Key starting with 'AIzaSy'`;
         }
+      } else if (
+        errorString.includes("API key expired") ||
+        errorString.includes("API_KEY_INVALID") ||
+        errorString.includes("renew the API key") ||
+        errorString.includes("expired")
+      ) {
+        errorString = "Your configured GEMINI_API_KEY has expired. Please open the Settings menu in Google AI Studio, locate the GEMINI_API_KEY secret, and renew or replace it with a fresh active API key starting with 'AIzaSy' to resume live online AI planning";
       }
 
       fallback.reply = `[⚠️ Gemini API Offline] ${errorString}.\n\nUsing local backup:\n${fallback.reply}`;
