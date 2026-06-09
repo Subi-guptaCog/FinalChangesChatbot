@@ -21,11 +21,22 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 function getEffectiveApiKey(): string | undefined {
   let envKey = process.env.GEMINI_API_KEY;
+
+  console.log("GEMINI_API_KEY Exists:", !!envKey);
+
   if (!envKey) return undefined;
+
   envKey = envKey.trim().replace(/^["']|["']$/g, "").trim();
-  if (envKey === "PLACEHOLDER" || envKey.includes("MY_GEMINI_API") || envKey === "" || envKey === "AIzaSyYourNewApiKeyHere") {
+
+  if (
+    envKey === "PLACEHOLDER" ||
+    envKey.includes("MY_GEMINI_API") ||
+    envKey === "" ||
+    envKey === "AIzaSyYourNewApiKeyHere"
+  ) {
     return undefined;
   }
+
   return envKey;
 }
 
@@ -44,9 +55,12 @@ function getGeminiClient(): GoogleGenAI {
 
 // Check api health status
 app.get(["/api/health", "/health"], (req, res) => {
+  const key = process.env.GEMINI_API_KEY;
   res.json({
     status: "ok",
     hasApiKey: !!getEffectiveApiKey(),
+    keyExists: !!key,
+    keyPrefix: key ? key.substring(0, 6) : null,
     time: new Date().toISOString()
   });
 });
@@ -251,7 +265,11 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       });
 
       // Call Gemini API with Structured Output Schema and resilience chain with active transient-error retries
-      const MODELS_TO_TRY = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+      const MODELS_TO_TRY = [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash"
+      ];
       let response = null;
       let lastError: any = null;
       let successfulModel = "";
