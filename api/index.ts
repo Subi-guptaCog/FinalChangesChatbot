@@ -305,13 +305,13 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       Guidelines:
       1. If the user asks you to add, write, create, or schedule a task (e.g., "Add 'buy milk' to my todo list"):
          - Include an action of type 'ADD_TASK'
-         - The payload must contain appropriate properties (title, description, priority: "Low" or "Medium" or "High", status: "New" or "In progress" or "code completed" or "waiting for QA" or "ready" or "done", dueDate, category)
+         - The payload must contain appropriate properties (title, description, priority: "Low" or "Medium" or "High", status: "Pending Business" or "Done" or "In Progress" or "Ready" or "Duplicate" or "New" or "Waiting for QA" or "Pending Dev", dueDate, category)
       2. If the user asks you to mark a task as done, complete, or finish:
          - Search for the task in the list above by name, keywords, or look at the ID.
          - If found, include an action of type 'COMPLETE_TASK' with the payload of { id: "taskId" }
       3. If the user asks to modify/edit details of an existing task:
          - Find the task id.
-         - Include an action of type 'UPDATE_TASK' with { id: "taskId", title, description, priority: "Low" | "Medium" | "High", status: "New" | "In progress" | "code completed" | "waiting for QA" | "ready" | "done" }
+         - Include an action of type 'UPDATE_TASK' with { id: "taskId", title, description, priority: "Low" | "Medium" | "High", status: "Pending Business" | "Done" | "In Progress" | "Ready" | "Duplicate" | "New" | "Waiting for QA" | "Pending Dev" }
       4. If the user asks to delete, remove, or throw away a task:
          - Find the task id.
          - Include an action of type 'DELETE_TASK' with { id: "taskId" }
@@ -390,7 +390,7 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
                           },
                           payload: {
                             type: Type.OBJECT,
-                            description: "Data for the action. For ADD_TASK, payload should have properties like title, description (optional), priority ('Low' | 'Medium' | 'High'), status ('New' | 'In progress' | 'code completed' | 'waiting for QA' | 'ready' | 'done'), dueDate, category. For COMPLETE_TASK/DELETE_TASK, must have { id }",
+                            description: "Data for the action. For ADD_TASK, payload should have properties like title, description (optional), priority ('Low' | 'Medium' | 'High'), status ('Pending Business' | 'Done' | 'In Progress' | 'Ready' | 'Duplicate' | 'New' | 'Waiting for QA' | 'Pending Dev'), dueDate, category. For COMPLETE_TASK/DELETE_TASK, must have { id }",
                             properties: {
                               id: { type: Type.STRING },
                               title: { type: Type.STRING },
