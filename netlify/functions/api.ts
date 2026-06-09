@@ -8,8 +8,10 @@ if (typeof dns.setDefaultResultOrder === "function") {
 }
 
 function getEffectiveApiKey(): string | undefined {
-  const envKey = process.env.GEMINI_API_KEY;
-  if (!envKey || envKey === "PLACEHOLDER" || envKey.includes("MY_GEMINI_API") || envKey === "" || envKey === "AIzaSyYourNewApiKeyHere") {
+  let envKey = process.env.GEMINI_API_KEY;
+  if (!envKey) return undefined;
+  envKey = envKey.trim().replace(/^["']|["']$/g, "").trim();
+  if (envKey === "PLACEHOLDER" || envKey.includes("MY_GEMINI_API") || envKey === "" || envKey === "AIzaSyYourNewApiKeyHere") {
     return undefined;
   }
   return envKey;
