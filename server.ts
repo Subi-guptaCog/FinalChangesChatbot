@@ -40,6 +40,63 @@ function getEffectiveApiKey(): string | undefined {
   return envKey;
 }
 
+async function queryOpenRouter(apiKey: string, systemInstruction: string, contents: any[]): Promise<{ text: string; successfulModel: string }> {
+  // Try google models first on OpenRouter, then standard failovers
+  const MODELS_TO_TRY = [
+    "google/gemini-2.5-flash:free",
+    "meta-llama/llama-3-8b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+    "qwen/qwen-2-7b-instruct:free",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+    "meta-llama/llama-3.3-70b-instruct",
+    "openai/gpt-4o-mini"
+  ];
+
+  let lastError: any = null;
+  for (const model of MODELS_TO_TRY) {
+    try {
+      console.log(`[OpenRouter Chatbot] Attempting model: ${model}`);
+      const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://ai.studio/build",
+          "X-Title": "Task Chatbot"
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: "system", content: systemInstruction },
+            ...contents.map((c: any) => ({
+              role: c.role === "model" ? "assistant" : c.role,
+              content: c.parts?.[0]?.text || ""
+            }))
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!openrouterResponse.ok) {
+        const errText = await openrouterResponse.text();
+        throw new Error(`OpenRouter API failed (${openrouterResponse.status}): ${errText}`);
+      }
+
+      const data = await openrouterResponse.json() as any;
+      const text = data.choices?.[0]?.message?.content;
+      if (text) {
+        return { text, successfulModel: model };
+      }
+    } catch (err: any) {
+      console.warn(`[OpenRouter Chatbot] Model ${model} failed:`, err.message || err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("All OpenRouter models failed to respond.");
+}
+
 // On-demand Gemini client creation to ensure any API key changes take effect immediately
 function getGeminiClient(): GoogleGenAI {
   const key = getEffectiveApiKey() || "";
@@ -234,13 +291,13 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       Guidelines:
       1. If the user asks you to add, write, create, or schedule a task (e.g., "Add 'buy milk' to my todo list"):
          - Include an action of type 'ADD_TASK'
-         - The payload must contain appropriate properties (title, description, priority: "Low" or "Medium" or "High" or "Hight", status: "New" or "In progress" or "code completed" or "waiting for QA" or "ready" or "done", dueDate, category)
+         - The payload must contain appropriate properties (title, description, priority: "Low" or "Medium" or "High" or "Hight", status: "Pending Business" or "Done" or "In Progress" or "Ready" or "Duplicate" or "New" or "Waiting for QA" or "Pending Dev", dueDate, category)
       2. If the user asks you to mark a task as done, complete, or finish:
          - Search for the task in the list above by name, keywords, or look at the ID.
          - If found, include an action of type 'COMPLETE_TASK' with the payload of { id: "taskId" }
       3. If the user asks to modify/edit details of an existing task:
          - Find the task id.
-         - Include an action of type 'UPDATE_TASK' with { id: "taskId", title, description, priority: "Low" | "Medium" | "High" | "Hight", status: "New" | "In progress" | "code completed" | "waiting for QA" | "ready" | "done" }
+         - Include an action of type 'UPDATE_TASK' with { id: "taskId", title, description, priority: "Low" | "Medium" | "High" | "Hight", status: "Pending Business" | "Done" | "In Progress" | "Ready" | "Duplicate" | "New" | "Waiting for QA" | "Pending Dev" }
       4. If the user asks to delete, remove, or throw away a task:
          - Find the task id.
          - Include an action of type 'DELETE_TASK' with { id: "taskId" }
@@ -263,6 +320,25 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
         role: "user",
         parts: [{ text: message }]
       });
+
+      // Check if this is an OpenRouter API key and route accordingly
+      const isOpenRouter = apiKey && (apiKey.startsWith("sk-or-") || apiKey.startsWith("sk-"));
+      if (isOpenRouter) {
+        try {
+          console.log("[TaskChatbot Server] Routing requests to OpenRouter...");
+          const { text: outputText, successfulModel } = await queryOpenRouter(apiKey, systemInstruction, contents);
+          const resultObj = JSON.parse(outputText);
+          resultObj.reply = `[⚡ OpenRouter: ${successfulModel}] ` + resultObj.reply;
+          res.json(resultObj);
+          return;
+        } catch (orError: any) {
+          console.error("OpenRouter API call failed, falling back to rule-based parser:", orError);
+          const fallback = parseTaskActionOffline(message, currentTasks || []);
+          fallback.reply = `[⚠️ OpenRouter API Offline] ${orError.message || orError}.\n\nUsing local backup:\n${fallback.reply}`;
+          res.json(fallback);
+          return;
+        }
+      }
 
       // Call Gemini API with Structured Output Schema and resilience chain with active transient-error retries
       const MODELS_TO_TRY = [
@@ -304,7 +380,7 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
                           },
                           payload: {
                             type: Type.OBJECT,
-                            description: "Data for the action. For ADD_TASK, payload should have properties like title, description (optional), priority ('Low' | 'Medium' | 'High' | 'Hight'), status ('New' | 'In progress' | 'code completed' | 'waiting for QA' | 'ready' | 'done'), dueDate, category. For COMPLETE_TASK/DELETE_TASK, must have { id }",
+                            description: "Data for the action. For ADD_TASK, payload should have properties like title, description (optional), priority ('Low' | 'Medium' | 'High' | 'Hight'), status ('Pending Business' | 'Done' | 'In Progress' | 'Ready' | 'Duplicate' | 'New' | 'Waiting for QA' | 'Pending Dev'), dueDate, category. For COMPLETE_TASK/DELETE_TASK, must have { id }",
                             properties: {
                               id: { type: Type.STRING },
                               title: { type: Type.STRING },
