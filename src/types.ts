@@ -1,14 +1,17 @@
 export enum TaskStatus {
   NEW = "New",
-  IN_PROGRESS = "In progress",
-  CODE_COMPLETED = "code completed",
-  WAITING_FOR_QA = "waiting for QA",
-  READY = "ready",
-  DONE = "done",
+  PENDING_BUSINESS = "Pending Business",
+  PENDING_DEV = "Pending Dev",
+  IN_PROGRESS = "In Progress",
+  WAITING_FOR_QA = "Waiting for QA",
+  READY = "Ready",
+  DONE = "Done",
+  DUPLICATE = "Duplicate",
 
   // Backward compatibility mappings
   TODO = "New",
-  COMPLETED = "done"
+  COMPLETED = "Done",
+  CODE_COMPLETED = "Pending Dev"
 }
 
 export enum TaskPriority {
