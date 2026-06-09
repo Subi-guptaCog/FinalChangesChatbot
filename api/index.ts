@@ -2,6 +2,8 @@ import express from "express";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import dns from "dns";
+import fs from "fs";
+import path from "path";
 
 // Resolve common Node.js fetch failed/DNS resolution issues by prioritizing IPv4
 if (typeof dns.setDefaultResultOrder === "function") {
@@ -33,6 +35,63 @@ function getEffectiveApiKey(): string | undefined {
   }
 
   return envKey;
+}
+
+async function queryOpenRouter(apiKey: string, systemInstruction: string, contents: any[]): Promise<{ text: string; successfulModel: string }> {
+  // Try google models first on OpenRouter, then standard failovers
+  const MODELS_TO_TRY = [
+    "google/gemini-2.5-flash:free",
+    "meta-llama/llama-3-8b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+    "qwen/qwen-2-7b-instruct:free",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+    "meta-llama/llama-3.3-70b-instruct",
+    "openai/gpt-4o-mini"
+  ];
+
+  let lastError: any = null;
+  for (const model of MODELS_TO_TRY) {
+    try {
+      console.log(`[OpenRouter Chatbot Vercel] Attempting model: ${model}`);
+      const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://ai.studio/build",
+          "X-Title": "Task Chatbot"
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: "system", content: systemInstruction },
+            ...contents.map((c: any) => ({
+              role: c.role === "model" ? "assistant" : c.role,
+              content: c.parts?.[0]?.text || ""
+            }))
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!openrouterResponse.ok) {
+        const errText = await openrouterResponse.text();
+        throw new Error(`OpenRouter API failed (${openrouterResponse.status}): ${errText}`);
+      }
+
+      const data = await openrouterResponse.json() as any;
+      const text = data.choices?.[0]?.message?.content;
+      if (text) {
+        return { text, successfulModel: model };
+      }
+    } catch (err: any) {
+      console.warn(`[OpenRouter Chatbot Vercel] Model ${model} failed:`, err.message || err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("All OpenRouter models failed to respond.");
 }
 
 // On-demand Gemini client creation to ensure any API key changes take effect immediately
@@ -150,6 +209,63 @@ app.get(["/api/health", "/health", "/api/", "/"], (req, res) => {
   });
 });
 
+// Endpoint to upload CSV file: checks if folder exists, if not creates it, and saves the file
+app.post("/api/upload-csv", (req, res) => {
+  try {
+    const { csvContent, fileName } = req.body;
+    if (!csvContent || typeof csvContent !== "string") {
+      res.status(400).json({ error: "No CSV content provided." });
+      return;
+    }
+
+    // Name of target folder for CSV uploads
+    const targetFolder = "DesktopTasksWorkspace";
+    const dirPath = path.join(process.cwd(), targetFolder);
+
+    // If the directory does not exist, try to create it
+    try {
+      if (!fs.existsSync(dirPath)) {
+        console.log(`[CSV WORKSPACE] Directory does not exist. Creating folder: ${dirPath}`);
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
+    } catch (fsWriteErr: any) {
+      console.warn("[CSV WORKSPACE] Could not create directory (expected in read-only serverless):", fsWriteErr);
+    }
+
+    const safeFileName = fileName || "tasks.csv";
+    const filePath = path.join(dirPath, safeFileName);
+
+    let savedLocally = false;
+    try {
+      // Save the file physically (may fail in serverless - we capture it)
+      fs.writeFileSync(filePath, csvContent, "utf8");
+      console.log(`[CSV WORKSPACE] File successfully uploaded and saved: ${filePath}`);
+      savedLocally = true;
+    } catch (fsWriteErr: any) {
+      console.warn("[CSV WORKSPACE] File save failed (expected in read-only serverless):", fsWriteErr);
+    }
+
+    if (savedLocally) {
+      res.json({
+        success: true,
+        message: `Successfully saved inside server folder '${targetFolder}' as '${safeFileName}'.`,
+        folderPath: dirPath,
+        filePath: filePath,
+      });
+    } else {
+      // In serverless/read-only environments, we still succeed or provide a graceful notification because tasks are loaded in client state.
+      res.json({
+        success: true,
+        message: `CSV integrated in client session state. (Server-side storage was bypassed in serverless cloud environment)`,
+        serverlessMode: true
+      });
+    }
+  } catch (error: any) {
+    console.error("[CSV WORKSPACE] Upload error:", error);
+    res.status(500).json({ error: error?.message || "Internal server error" });
+  }
+});
+
 // Chatbot routing route
 app.post(["/api/chat", "/chat"], async (req, res) => {
   try {
@@ -216,6 +332,25 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
         role: "user",
         parts: [{ text: message }]
       });
+
+      // Check if this is an OpenRouter API key and route accordingly
+      const isOpenRouter = apiKey && (apiKey.startsWith("sk-or-") || apiKey.startsWith("sk-"));
+      if (isOpenRouter) {
+        try {
+          console.log("[TaskChatbot Vercel] Routing requests to OpenRouter...");
+          const { text: outputText, successfulModel } = await queryOpenRouter(apiKey, systemInstruction, contents);
+          const resultObj = JSON.parse(outputText);
+          resultObj.reply = `[⚡ OpenRouter: ${successfulModel}] ` + resultObj.reply;
+          res.json(resultObj);
+          return;
+        } catch (orError: any) {
+          console.error("OpenRouter API call failed, falling back to rule-based parser:", orError);
+          const fallback = parseTaskActionOffline(message, currentTasks || []);
+          fallback.reply = `[⚠️ OpenRouter API Offline] ${orError.message || orError}.\n\nUsing local backup:\n${fallback.reply}`;
+          res.json(fallback);
+          return;
+        }
+      }
 
       const MODELS_TO_TRY = [
         "gemini-2.5-flash",
