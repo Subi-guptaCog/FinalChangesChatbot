@@ -1,6 +1,8 @@
 import { Handler } from "@netlify/functions";
 import { GoogleGenAI, Type } from "@google/genai";
 import dns from "dns";
+import fs from "fs";
+import path from "path";
 
 // Resolve common Node.js fetch failed/DNS resolution issues by prioritizing IPv4
 if (typeof dns.setDefaultResultOrder === "function") {
@@ -26,6 +28,63 @@ function getEffectiveApiKey(): string | undefined {
   }
 
   return envKey;
+}
+
+async function queryOpenRouter(apiKey: string, systemInstruction: string, contents: any[]): Promise<{ text: string; successfulModel: string }> {
+  // Try google models first on OpenRouter, then standard failovers
+  const MODELS_TO_TRY = [
+    "google/gemini-2.5-flash:free",
+    "meta-llama/llama-3-8b-instruct:free",
+    "mistralai/mistral-7b-instruct:free",
+    "qwen/qwen-2-7b-instruct:free",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-pro",
+    "meta-llama/llama-3.3-70b-instruct",
+    "openai/gpt-4o-mini"
+  ];
+
+  let lastError: any = null;
+  for (const model of MODELS_TO_TRY) {
+    try {
+      console.log(`[OpenRouter Chatbot Netlify] Attempting model: ${model}`);
+      const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://ai.studio/build",
+          "X-Title": "Task Chatbot"
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: "system", content: systemInstruction },
+            ...contents.map((c: any) => ({
+              role: c.role === "model" ? "assistant" : c.role,
+              content: c.parts?.[0]?.text || ""
+            }))
+          ],
+          response_format: { type: "json_object" }
+        })
+      });
+
+      if (!openrouterResponse.ok) {
+        const errText = await openrouterResponse.text();
+        throw new Error(`OpenRouter API failed (${openrouterResponse.status}): ${errText}`);
+      }
+
+      const data = await openrouterResponse.json() as any;
+      const text = data.choices?.[0]?.message?.content;
+      if (text) {
+        return { text, successfulModel: model };
+      }
+    } catch (err: any) {
+      console.warn(`[OpenRouter Chatbot Netlify] Model ${model} failed:`, err.message || err);
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("All OpenRouter models failed to respond.");
 }
 
 // Local rule-based task actions parsing engine for offline fallback
@@ -118,11 +177,12 @@ function parseTaskActionOffline(message: string, currentTasks: any[]): { reply: 
 }
 
 export const handler: Handler = async (event) => {
-  const path = event.path || "";
+  const reqPath = event.path || "";
   const method = event.httpMethod;
   const queryParams = event.queryStringParameters || {};
-  const isHealthRoute = path.endsWith("/health") || path.includes("/health") || queryParams.route === "health";
-  const isChatRoute = path.endsWith("/chat") || path.includes("/chat") || queryParams.route === "chat";
+  const isHealthRoute = reqPath.endsWith("/health") || reqPath.includes("/health") || queryParams.route === "health";
+  const isChatRoute = reqPath.endsWith("/chat") || reqPath.includes("/chat") || queryParams.route === "chat";
+  const isUploadCsvRoute = reqPath.endsWith("/upload-csv") || reqPath.includes("/upload-csv") || queryParams.route === "upload-csv";
 
   // CORS headers
   const headers = {
@@ -154,6 +214,85 @@ export const handler: Handler = async (event) => {
         time: new Date().toISOString()
       }),
     };
+  }
+
+  // Upload CSV route
+  if (isUploadCsvRoute && method === "POST") {
+    try {
+      if (!event.body) {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: "No body provided." }),
+        };
+      }
+
+      const { csvContent, fileName } = JSON.parse(event.body);
+      if (!csvContent || typeof csvContent !== "string") {
+        return {
+          statusCode: 400,
+          headers,
+          body: JSON.stringify({ error: "No CSV content provided." }),
+        };
+      }
+
+      // Name of target folder for CSV uploads
+      const targetFolder = "DesktopTasksWorkspace";
+      const dirPath = path.join(process.cwd(), targetFolder);
+
+      // If the directory does not exist, try to create it
+      try {
+        if (!fs.existsSync(dirPath)) {
+          console.log(`[CSV WORKSPACE] Directory does not exist. Creating folder: ${dirPath}`);
+          fs.mkdirSync(dirPath, { recursive: true });
+        }
+      } catch (fsWriteErr: any) {
+        console.warn("[CSV WORKSPACE] Could not create directory (expected in read-only serverless):", fsWriteErr);
+      }
+
+      const safeFileName = fileName || "tasks.csv";
+      const filePath = path.join(dirPath, safeFileName);
+
+      let savedLocally = false;
+      try {
+        // Save the file physically (may fail in serverless - we capture it)
+        fs.writeFileSync(filePath, csvContent, "utf8");
+        console.log(`[CSV WORKSPACE] File successfully uploaded and saved: ${filePath}`);
+        savedLocally = true;
+      } catch (fsWriteErr: any) {
+        console.warn("[CSV WORKSPACE] File save failed (expected in read-only serverless):", fsWriteErr);
+      }
+
+      if (savedLocally) {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({
+            success: true,
+            message: `Successfully saved inside server folder '${targetFolder}' as '${safeFileName}'.`,
+            folderPath: dirPath,
+            filePath: filePath,
+          }),
+        };
+      } else {
+        return {
+          statusCode: 200,
+          headers,
+          body: JSON.stringify({
+            success: true,
+            message: `CSV integrated in client session state. (Server-side storage was bypassed in serverless cloud environment)`,
+            serverlessMode: true,
+          }),
+        };
+      }
+    } catch (error: any) {
+      console.error("[CSV WORKSPACE] Upload error:", error);
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ error: error?.message || "Internal server error" }),
+      };
+    }
   }
 
   // Chatbot routing
@@ -249,6 +388,31 @@ export const handler: Handler = async (event) => {
         role: "user",
         parts: [{ text: message }]
       });
+
+      // Check if this is an OpenRouter API key and route accordingly
+      const isOpenRouter = apiKey && (apiKey.startsWith("sk-or-") || apiKey.startsWith("sk-"));
+      if (isOpenRouter) {
+        try {
+          console.log("[TaskChatbot Netlify] Routing requests to OpenRouter...");
+          const { text: outputText, successfulModel } = await queryOpenRouter(apiKey, systemInstruction, contents);
+          const resultObj = JSON.parse(outputText);
+          resultObj.reply = `[⚡ OpenRouter: ${successfulModel}] ` + resultObj.reply;
+          return {
+            statusCode: 200,
+            headers,
+            body: JSON.stringify(resultObj),
+          };
+        } catch (orError: any) {
+          console.error("OpenRouter API call failed, falling back to rule-based parser:", orError);
+          const fallback = parseTaskActionOffline(message, currentTasks || []);
+          fallback.reply = `[⚠️ OpenRouter API Offline] ${orError.message || orError}.\n\nUsing local backup:\n${fallback.reply}`;
+          return {
+            statusCode: 200,
+            headers,
+            body: JSON.stringify(fallback),
+          };
+        }
+      }
 
       const MODELS_TO_TRY = [
         "gemini-2.5-flash",
@@ -409,6 +573,6 @@ export const handler: Handler = async (event) => {
   return {
     statusCode: 404,
     headers,
-    body: JSON.stringify({ error: `Not Found: ${method} ${path}` }),
+    body: JSON.stringify({ error: `Not Found: ${method} ${reqPath}` }),
   };
 };
