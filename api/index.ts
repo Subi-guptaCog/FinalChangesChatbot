@@ -60,7 +60,7 @@ async function queryOpenRouter(apiKey: string, systemInstruction: string, conten
           "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://ai.studio/build",
-          "X-Title": "Task Chatbot"
+          "X-Title": "AICHATBOTOLI"
         },
         body: JSON.stringify({
           model: model,
