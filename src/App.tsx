@@ -13,7 +13,7 @@ const INITIAL_MESSAGES: ChatMessage[] = [
   {
     id: "welcome-msg",
     sender: "assistant",
-    text: "Hello! I'm the TaskChatbot. I see you just deployed me using Docker. How can I help you manage your work items today?",
+    text: "Hello! I'm AICHATBOTOLI. I am ready to help you manage your work items today. How can I help you?",
     timestamp: new Date().toISOString()
   }
 ];
@@ -22,12 +22,12 @@ const INITIAL_LOGS = [
   `[${new Date().toLocaleTimeString()}] info: Microsoft.Hosting.Lifetime[0] Application started. Press Ctrl+C to shut down.`,
   `[${new Date().toLocaleTimeString()}] info: Microsoft.Hosting.Lifetime[0] Hosting environment: Production`,
   `[${new Date().toLocaleTimeString()}] info: Microsoft.Hosting.Lifetime[0] Content root path: /app/workspace`,
-  `$ docker build -t task-chatbot .`,
+  `$ docker build -t aichatbotoli .`,
   `Step 1/11 : FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build ... DONE`,
   `Step 2/11 : WORKDIR /src ... OK`,
-  `Step 11/11 : ENTRYPOINT ["dotnet", "TaskChatbot.dll"] ... EXPOSED (PORT 3000)`,
+  `Step 11/11 : ENTRYPOINT ["dotnet", "aichatbotoli.dll"] ... EXPOSED (PORT 3000)`,
   `$ [SYSTEM] Querying local SQLite database... OK`,
-  `> Task Chatbot is up and listening for dynamic instructions.`
+  `> AICHATBOTOLI is up and listening for dynamic instructions.`
 ];
 
 export default function App() {
@@ -155,12 +155,18 @@ export default function App() {
 
       const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
       
-      const titleIndex = headers.findIndex(h => h === "title" || h === "task" || h === "name" || h === "workitem");
+      const titleIndex = headers.findIndex(h => h === "title" || h === "task" || h === "name" || h === "workitem" || h === "subject");
       const descIndex = headers.findIndex(h => h === "description" || h === "desc" || h === "details" || h === "summary");
-      const priorityIndex = headers.findIndex(h => h === "priority" || h === "lvl" || h === "rank");
-      const statusIndex = headers.findIndex(h => h === "status" || h === "state" || h === "progress");
-      const categoryIndex = headers.findIndex(h => h === "category" || h === "tag" || h === "type" || h === "project");
+      const priorityIndex = headers.findIndex(h => h === "priority" || h === "lvl" || h === "rank" || h === "severity");
+      const statusIndex = headers.findIndex(h => h === "status" || h === "state" || h === "progress" || h === "stage");
+      const categoryIndex = headers.findIndex(h => h === "category" || h === "project");
       const dueDateIndex = headers.findIndex(h => h === "duedate" || h === "due" || h === "date");
+
+      // Custom agile tracking headers
+      const idIndex = headers.findIndex(h => h === "id" || h === "workitemid" || h === "task id" || h === "item id" || h === "key");
+      const workTypeIndex = headers.findIndex(h => h === "work item type" || h === "workitemtype" || h === "type" || h === "kind");
+      const assignedToIndex = headers.findIndex(h => h === "assigned to" || h === "assignedto" || h === "assignee" || h === "owner");
+      const tagsIndex = headers.findIndex(h => h === "tags" || h === "tag" || h === "labels" || h === "label");
 
       const parsedTasks: Task[] = [];
       let skippedCount = 0;
@@ -168,6 +174,26 @@ export default function App() {
       for (let i = 1; i < lines.length; i++) {
         const values = parseCsvLine(lines[i]);
         if (values.length === 0 || (values.length === 1 && !values[0])) continue;
+
+        let idVal = "";
+        if (idIndex !== -1 && values[idIndex]) {
+          idVal = values[idIndex].replace(/^["']|["']$/g, "").trim();
+        }
+
+        let workTypeVal = "";
+        if (workTypeIndex !== -1 && values[workTypeIndex]) {
+          workTypeVal = values[workTypeIndex].replace(/^["']|["']$/g, "").trim();
+        }
+
+        let assignedToVal = "";
+        if (assignedToIndex !== -1 && values[assignedToIndex]) {
+          assignedToVal = values[assignedToIndex].replace(/^["']|["']$/g, "").trim();
+        }
+
+        let tagsVal = "";
+        if (tagsIndex !== -1 && values[tagsIndex]) {
+          tagsVal = values[tagsIndex].replace(/^["']|["']$/g, "").trim();
+        }
 
         let title = "";
         if (titleIndex !== -1 && values[titleIndex]) {
@@ -185,10 +211,25 @@ export default function App() {
           continue;
         }
 
-        let description = "Imported bulk task item.";
-        if (descIndex !== -1 && values[descIndex]) {
-          description = values[descIndex].replace(/^["']|["']$/g, "").trim();
+        // Prepend ID tag to title if it exists to match standard tracking layouts
+        if (idVal && !title.startsWith("#") && !title.includes(idVal)) {
+          title = `#${idVal}: ${title}`;
         }
+
+        let descriptionParts: string[] = [];
+        if (workTypeVal) descriptionParts.push(`Work Item Type: ${workTypeVal}`);
+        if (assignedToVal) descriptionParts.push(`Assigned to: ${assignedToVal}`);
+        if (tagsVal) descriptionParts.push(`Tags: ${tagsVal}`);
+
+        let descVal = "Imported bulk task item.";
+        if (descIndex !== -1 && values[descIndex]) {
+          descVal = values[descIndex].replace(/^["']|["']$/g, "").trim();
+        }
+        if (descVal) {
+          descriptionParts.push(descVal);
+        }
+
+        const description = descriptionParts.join(". ");
 
         let priorityStr = "Medium";
         if (priorityIndex !== -1 && values[priorityIndex]) {
@@ -228,6 +269,10 @@ export default function App() {
         let category = "CSV Import";
         if (categoryIndex !== -1 && values[categoryIndex]) {
           category = values[categoryIndex].replace(/^["']|["']$/g, "").trim();
+        } else if (workTypeVal) {
+          category = workTypeVal;
+        } else if (tagsVal) {
+          category = tagsVal.split(/[,;\s]+/)[0].trim() || "CSV Import";
         }
 
         let dueDate = undefined;
@@ -604,11 +649,11 @@ export default function App() {
         <div className="flex items-center gap-3">
           {/* Logo icon representation */}
           <div className="w-8 h-8 bg-[#3B82F6] rounded-md flex items-center justify-center font-black text-white text-base tracking-wider select-none shadow-sm shadow-blue-500/20">
-            T
+            A
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-[#F8FAFC] tracking-tight text-sm md:text-base">TaskChatbot</span>
+              <span className="font-bold text-[#F8FAFC] tracking-tight text-sm md:text-base">AICHATBOTOLI</span>
               <span className="text-[10px] bg-[#2D3139] text-[#8B949E] px-1.5 py-0.5 rounded-md font-mono border border-[#2D3139]">v2.1.0</span>
             </div>
           </div>
