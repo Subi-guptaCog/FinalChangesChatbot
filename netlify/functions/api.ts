@@ -301,6 +301,13 @@ export const handler: Handler = async (event) => {
     let history: any[] = [];
     let currentTasks: any[] = [];
 
+    const formatResp = (obj: any) => ({
+      reply: obj.reply || "",
+      output: obj.reply || "",
+      text: obj.reply || "",
+      actions: obj.actions || []
+    });
+
     try {
       if (!event.body) {
         return {
@@ -311,7 +318,8 @@ export const handler: Handler = async (event) => {
       }
 
       const parsed = JSON.parse(event.body);
-      message = parsed.message;
+      const rawMsg = parsed.message ?? parsed.chatInput ?? parsed.text ?? parsed.prompt ?? parsed.query ?? parsed.input;
+      message = typeof rawMsg === "string" ? rawMsg.trim() : (rawMsg ? String(rawMsg).trim() : "");
       history = parsed.history || [];
       currentTasks = parsed.currentTasks || [];
 
@@ -319,7 +327,10 @@ export const handler: Handler = async (event) => {
         return {
           statusCode: 400,
           headers,
-          body: JSON.stringify({ error: "Missing 'message' field" }),
+          body: JSON.stringify({
+            error: "Missing 'message' (or 'chatInput'/'input') in request body.",
+            hint: "For n8n HTTP Request, set JSON Body to: { \"message\": \"={{ $json.chatInput }}\" }"
+          }),
         };
       }
 
@@ -332,7 +343,7 @@ export const handler: Handler = async (event) => {
         return {
           statusCode: 200,
           headers,
-          body: JSON.stringify(fallback),
+          body: JSON.stringify(formatResp(fallback)),
         };
       }
 
@@ -400,7 +411,7 @@ export const handler: Handler = async (event) => {
           return {
             statusCode: 200,
             headers,
-            body: JSON.stringify(resultObj),
+            body: JSON.stringify(formatResp(resultObj)),
           };
         } catch (orError: any) {
           console.error("OpenRouter API call failed, falling back to rule-based parser:", orError);
@@ -409,7 +420,7 @@ export const handler: Handler = async (event) => {
           return {
             statusCode: 200,
             headers,
-            body: JSON.stringify(fallback),
+            body: JSON.stringify(formatResp(fallback)),
           };
         }
       }
@@ -524,7 +535,7 @@ export const handler: Handler = async (event) => {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify(resultObj),
+        body: JSON.stringify(formatResp(resultObj)),
       };
     } catch (apiError: any) {
       const fallback = parseTaskActionOffline(message, currentTasks || []);
@@ -564,7 +575,7 @@ export const handler: Handler = async (event) => {
       return {
         statusCode: 200,
         headers,
-        body: JSON.stringify(fallback),
+        body: JSON.stringify(formatResp(fallback)),
       };
     }
   }
