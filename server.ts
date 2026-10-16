@@ -13,11 +13,27 @@ if (typeof dns.setDefaultResultOrder === "function") {
 
 dotenv.config({ override: true });
 
+import { INITIAL_TASKS } from "./src/initial_tasks.ts";
+
 const app = express();
 const PORT = 3000;
 
+// Enable CORS for all external origins (n8n, Postman, Webhooks, etc.)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+// Server-side task store for headless API calls (e.g. from n8n)
+let serverTasks = [...INITIAL_TASKS];
 
 function getEffectiveApiKey(): string | undefined {
   let envKey = process.env.GEMINI_API_KEY;
@@ -251,13 +267,94 @@ function parseTaskActionOffline(message: string, currentTasks: any[]): { reply: 
   return { reply, actions };
 }
 
-// Post endpoint for AICHATBOTOLI
+function applyTaskActions(actions: any[]) {
+  if (!Array.isArray(actions)) return;
+  for (const action of actions) {
+    if (!action || !action.type) continue;
+    if (action.type === "ADD_TASK" && action.payload?.title) {
+      serverTasks.unshift({
+        id: "task-" + Date.now() + Math.floor(Math.random() * 100),
+        title: action.payload.title,
+        description: action.payload.description || "",
+        status: action.payload.status || "New",
+        priority: action.payload.priority || "Medium",
+        dueDate: action.payload.dueDate || "",
+        category: action.payload.category || "n8n Integration",
+        createdAt: new Date().toISOString()
+      } as any);
+    } else if (action.type === "COMPLETE_TASK" && action.payload?.id) {
+      serverTasks = serverTasks.map(t => 
+        t.id === action.payload.id || t.title.toLowerCase().includes(String(action.payload.id).toLowerCase())
+          ? { ...t, status: "Done" as any }
+          : t
+      );
+    } else if (action.type === "DELETE_TASK" && action.payload?.id) {
+      serverTasks = serverTasks.filter(t => t.id !== action.payload.id);
+    }
+  }
+}
+
+function formatChatResponse(resultObj: { reply: string; actions?: any[] }) {
+  const finalReply = resultObj.reply || "";
+  return {
+    reply: finalReply,
+    output: finalReply, // n8n AI Agent standard output key
+    text: finalReply,   // n8n Chat output standard key
+    actions: resultObj.actions || []
+  };
+}
+
+// Tasks management REST endpoints for n8n and external HTTP agents
+app.get("/api/tasks", (req, res) => {
+  res.json({
+    total: serverTasks.length,
+    tasks: serverTasks
+  });
+});
+
+app.post("/api/tasks", (req, res) => {
+  const { title, description, priority, status, category, dueDate } = req.body;
+  if (!title) {
+    res.status(400).json({ error: "Missing required 'title' field." });
+    return;
+  }
+  const newTask = {
+    id: "task-" + Date.now(),
+    title,
+    description: description || "",
+    priority: priority || "Medium",
+    status: status || "New",
+    category: category || "n8n",
+    dueDate: dueDate || "",
+    createdAt: new Date().toISOString()
+  };
+  serverTasks.unshift(newTask as any);
+  res.status(201).json({
+    success: true,
+    task: newTask,
+    message: "Task created successfully"
+  });
+});
+
+// Post endpoint for AICHATBOTOLI (Compatible with browser, cURL, and n8n)
 app.post(["/api/chat", "/chat"], async (req, res) => {
   try {
-    const { message, history, currentTasks } = req.body;
+    const rawMsg = req.body.message ?? req.body.chatInput ?? req.body.text ?? req.body.prompt ?? req.body.query ?? req.body.input;
+    const message = typeof rawMsg === "string" ? rawMsg.trim() : (rawMsg ? String(rawMsg).trim() : "");
+    const { history } = req.body;
+    const currentTasks = (Array.isArray(req.body.currentTasks) && req.body.currentTasks.length > 0)
+      ? req.body.currentTasks
+      : serverTasks.slice(0, 50);
 
     if (!message) {
-      res.status(400).json({ error: "Missing 'message' field" });
+      res.status(400).json({
+        error: "Missing 'message' (or 'chatInput'/'input') in request body.",
+        hint: "For n8n HTTP Request, set JSON Body to: { \"message\": \"={{ $json.chatInput }}\" }",
+        exampleBody: {
+          message: "What are my high priority tasks?",
+          currentTasks: []
+        }
+      });
       return;
     }
 
@@ -268,7 +365,8 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
     if (isPlaceholder) {
       const fallback = parseTaskActionOffline(message, currentTasks || []);
       fallback.reply += " [⚠️ Local Fallback — Set your GEMINI_API_KEY in Settings > Secrets to unlock Gemini capabilities]";
-      res.json(fallback);
+      applyTaskActions(fallback.actions);
+      res.json(formatChatResponse(fallback));
       return;
     }
 
@@ -329,13 +427,15 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
           const { text: outputText, successfulModel } = await queryOpenRouter(apiKey, systemInstruction, contents);
           const resultObj = JSON.parse(outputText);
           resultObj.reply = `[⚡ OpenRouter: ${successfulModel}] ` + resultObj.reply;
-          res.json(resultObj);
+          applyTaskActions(resultObj.actions);
+          res.json(formatChatResponse(resultObj));
           return;
         } catch (orError: any) {
           console.error("OpenRouter API call failed, falling back to rule-based parser:", orError);
           const fallback = parseTaskActionOffline(message, currentTasks || []);
           fallback.reply = `[⚠️ OpenRouter API Offline] ${orError.message || orError}.\n\nUsing local backup:\n${fallback.reply}`;
-          res.json(fallback);
+          applyTaskActions(fallback.actions);
+          res.json(formatChatResponse(fallback));
           return;
         }
       }
@@ -420,8 +520,6 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
               errMsg.includes("temporary");
 
             if (attempt < maxAttempts && isTransientError) {
-              // If it's a 503 overload / high demand error or a 429 quota/rate limit error, don't waste time retrying the SAME model.
-              // Skip same-model retries to trigger fallback to the next model immediately.
               const isOverloadedOrQuotaExceeded = 
                 errMsg.includes("503") || 
                 errMsg.includes("429") || 
@@ -433,11 +531,10 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
                 break;
               }
 
-              const waitMs = attempt * 1000; // 1s, then 2s progressive delay
+              const waitMs = attempt * 1000;
               console.log(`[TaskChatbot Server] Transient error recognized. Retrying model ${model} in ${waitMs}ms...`);
               await new Promise((resolve) => setTimeout(resolve, waitMs));
             } else {
-              // Not transient, or maximum attempts reached, so break inner loop to try other models
               break;
             }
           }
@@ -455,17 +552,17 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       const outputText = response.text || "{}";
       try {
         const resultObj = JSON.parse(outputText);
-        // If we used a backup model, prepend a friendly badge
         if (successfulModel !== MODELS_TO_TRY[0]) {
           resultObj.reply = `[⚡ Failover Active: ${successfulModel}] ` + resultObj.reply;
         }
-        res.json(resultObj);
+        applyTaskActions(resultObj.actions);
+        res.json(formatChatResponse(resultObj));
       } catch (e) {
         console.error("Failed to parse Gemini output as JSON, returning fallback:", outputText, e);
-        res.json({
-          reply: "I formulated a reply but had trouble formatting the structured data: " + outputText,
+        res.json(formatChatResponse({
+          reply: "I formulated a reply: " + outputText,
           actions: []
-        });
+        }));
       }
     } catch (apiError: any) {
       console.error("Gemini API call failed, falling back to rule-based parser:", apiError);
@@ -503,7 +600,8 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       }
 
       fallback.reply = `[⚠️ Gemini API Offline] ${errorString}.\n\nI processed your request using the local backup parser:\n${fallback.reply}`;
-      res.json(fallback);
+      applyTaskActions(fallback.actions);
+      res.json(formatChatResponse(fallback));
     }
   } catch (error: any) {
     console.error("Error in /api/chat:", error);
