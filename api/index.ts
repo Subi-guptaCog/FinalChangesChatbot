@@ -10,11 +10,27 @@ if (typeof dns.setDefaultResultOrder === "function") {
   dns.setDefaultResultOrder("ipv4first");
 }
 
+import { INITIAL_TASKS } from "../src/initial_tasks.ts";
+
 dotenv.config({ override: true });
 
 const app = express();
+
+// Enable CORS for external callers like n8n
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+let serverTasks = [...INITIAL_TASKS];
 
 function getEffectiveApiKey(): string | undefined {
   let envKey = process.env.GEMINI_API_KEY;
@@ -266,13 +282,94 @@ app.post("/api/upload-csv", (req, res) => {
   }
 });
 
-// Chatbot routing route
+function applyTaskActions(actions: any[]) {
+  if (!Array.isArray(actions)) return;
+  for (const action of actions) {
+    if (!action || !action.type) continue;
+    if (action.type === "ADD_TASK" && action.payload?.title) {
+      serverTasks.unshift({
+        id: "task-" + Date.now() + Math.floor(Math.random() * 100),
+        title: action.payload.title,
+        description: action.payload.description || "",
+        status: action.payload.status || "New",
+        priority: action.payload.priority || "Medium",
+        dueDate: action.payload.dueDate || "",
+        category: action.payload.category || "n8n Integration",
+        createdAt: new Date().toISOString()
+      } as any);
+    } else if (action.type === "COMPLETE_TASK" && action.payload?.id) {
+      serverTasks = serverTasks.map(t => 
+        t.id === action.payload.id || t.title.toLowerCase().includes(String(action.payload.id).toLowerCase())
+          ? { ...t, status: "Done" as any }
+          : t
+      );
+    } else if (action.type === "DELETE_TASK" && action.payload?.id) {
+      serverTasks = serverTasks.filter(t => t.id !== action.payload.id);
+    }
+  }
+}
+
+function formatChatResponse(resultObj: { reply: string; actions?: any[] }) {
+  const finalReply = resultObj.reply || "";
+  return {
+    reply: finalReply,
+    output: finalReply, // n8n AI Agent standard output key
+    text: finalReply,   // n8n Chat output standard key
+    actions: resultObj.actions || []
+  };
+}
+
+// Tasks management REST endpoints for n8n and external HTTP agents
+app.get("/api/tasks", (req, res) => {
+  res.json({
+    total: serverTasks.length,
+    tasks: serverTasks
+  });
+});
+
+app.post("/api/tasks", (req, res) => {
+  const { title, description, priority, status, category, dueDate } = req.body;
+  if (!title) {
+    res.status(400).json({ error: "Missing required 'title' field." });
+    return;
+  }
+  const newTask = {
+    id: "task-" + Date.now(),
+    title,
+    description: description || "",
+    priority: priority || "Medium",
+    status: status || "New",
+    category: category || "n8n",
+    dueDate: dueDate || "",
+    createdAt: new Date().toISOString()
+  };
+  serverTasks.unshift(newTask as any);
+  res.status(201).json({
+    success: true,
+    task: newTask,
+    message: "Task created successfully"
+  });
+});
+
+// Chatbot routing route (Compatible with browser, cURL, and n8n)
 app.post(["/api/chat", "/chat"], async (req, res) => {
   try {
-    const { message, history, currentTasks } = req.body;
+    const rawMsg = req.body.message ?? req.body.chatInput ?? req.body.text ?? req.body.prompt ?? req.body.query ?? req.body.input;
+    const message = typeof rawMsg === "string" ? rawMsg.trim() : (rawMsg ? String(rawMsg).trim() : "");
+    const { history } = req.body;
+    const currentTasks = (Array.isArray(req.body.currentTasks) && req.body.currentTasks.length > 0)
+      ? req.body.currentTasks
+      : serverTasks.slice(0, 50);
 
     if (!message) {
-      res.status(400).json({ error: "Missing 'message' field" });
+      res.status(400).json({
+        error: "Missing 'message' (or 'chatInput'/'input') in request body.",
+        hint: "For n8n HTTP Request, set JSON Body to: { \"message\": \"={{ $json.chatInput }}\" }",
+        exampleBody: {
+          message: "What are my high priority tasks?",
+          currentTasks: []
+        }
+      });
       return;
     }
 
@@ -282,7 +379,8 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
     if (isPlaceholder) {
       const fallback = parseTaskActionOffline(message, currentTasks || []);
       fallback.reply += " [⚠️ Local Fallback — Set your GEMINI_API_KEY in Vercel to unlock Gemini capabilities]";
-      res.json(fallback);
+      applyTaskActions(fallback.actions);
+      res.json(formatChatResponse(fallback));
       return;
     }
 
@@ -341,13 +439,15 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
           const { text: outputText, successfulModel } = await queryOpenRouter(apiKey, systemInstruction, contents);
           const resultObj = JSON.parse(outputText);
           resultObj.reply = `[⚡ OpenRouter: ${successfulModel}] ` + resultObj.reply;
-          res.json(resultObj);
+          applyTaskActions(resultObj.actions);
+          res.json(formatChatResponse(resultObj));
           return;
         } catch (orError: any) {
           console.error("OpenRouter API call failed, falling back to rule-based parser:", orError);
           const fallback = parseTaskActionOffline(message, currentTasks || []);
           fallback.reply = `[⚠️ OpenRouter API Offline] ${orError.message || orError}.\n\nUsing local backup:\n${fallback.reply}`;
-          res.json(fallback);
+          applyTaskActions(fallback.actions);
+          res.json(formatChatResponse(fallback));
           return;
         }
       }
@@ -458,7 +558,8 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       if (successfulModel !== MODELS_TO_TRY[0]) {
         resultObj.reply = `[⚡ Failover Active: ${successfulModel}] ` + resultObj.reply;
       }
-      res.json(resultObj);
+      applyTaskActions(resultObj.actions);
+      res.json(formatChatResponse(resultObj));
     } catch (apiError: any) {
       const fallback = parseTaskActionOffline(message, currentTasks || []);
       let errorString = "Unknown error";
@@ -493,7 +594,8 @@ app.post(["/api/chat", "/chat"], async (req, res) => {
       }
 
       fallback.reply = `[⚠️ Gemini API Offline] ${errorString}.\n\nUsing local backup:\n${fallback.reply}`;
-      res.json(fallback);
+      applyTaskActions(fallback.actions);
+      res.json(formatChatResponse(fallback));
     }
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "Internal Server Error" });
