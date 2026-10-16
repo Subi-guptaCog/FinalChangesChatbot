@@ -6,7 +6,8 @@ import TaskItem from "./components/TaskItem";
 import TaskForm from "./components/TaskForm";
 import AuthScreen from "./components/AuthScreen";
 import DesktopSyncPanel from "./components/DesktopSyncPanel";
-import { Sparkles, Terminal, Shield, RefreshCw, Layers, Plus, Search, Filter, Trash, Play, RefreshCcw, LogOut, Upload, FileSpreadsheet, ChevronDown, ChevronUp, Info } from "lucide-react";
+import N8nIntegrationPanel from "./components/N8nIntegrationPanel";
+import { Sparkles, Terminal, Shield, RefreshCw, Layers, Plus, Search, Filter, Trash, Play, RefreshCcw, LogOut, Upload, FileSpreadsheet, ChevronDown, ChevronUp, Info, Workflow } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 const INITIAL_MESSAGES: ChatMessage[] = [
@@ -55,7 +56,7 @@ export default function App() {
   });
 
   const [terminalLogs, setTerminalLogs] = useState<string[]>(INITIAL_LOGS);
-  const [activeSidebar, setActiveSidebar] = useState<"chat" | "tasks" | "settings" | "docker">("chat");
+  const [activeSidebar, setActiveSidebar] = useState<"chat" | "tasks" | "settings" | "docker" | "n8n">("chat");
   const [isPending, setIsPending] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
 
@@ -709,6 +710,22 @@ export default function App() {
             <span>Local: 3000</span>
           </div>
           <button 
+            id="header-n8n-btn"
+            onClick={() => {
+              setActiveSidebar("n8n");
+              addLog(`[UI FOCUS] Opened n8n & API Integration Guide.`);
+            }}
+            title="Open n8n HTTP Request Node & API Setup"
+            className={`p-1 px-2.5 rounded-md border text-xs flex items-center gap-1.5 cursor-pointer transition-all font-mono font-bold ${
+              activeSidebar === "n8n"
+                ? "bg-gradient-to-r from-orange-500/25 to-rose-500/25 border-orange-500 text-orange-400 shadow-sm shadow-orange-500/20"
+                : "bg-[#252A33] border-[#2D3139] hover:border-orange-500/50 hover:bg-orange-500/10 text-[#E0E0E0] hover:text-orange-400"
+            }`}
+          >
+            <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+            <span>n8n API</span>
+          </button>
+          <button 
             id="workspace-reset-btn"
             onClick={handleResetWorkspace}
             title="Clean Database & Reset Chats"
@@ -768,6 +785,25 @@ export default function App() {
             </button>
 
             <button
+              id="sidebar-n8n-tab"
+              onClick={() => {
+                setActiveSidebar("n8n");
+                addLog(`[UI FOCUS] Shifted primary focus viewport to: N8N-API-DOCS`);
+              }}
+              className={`w-12 h-12 rounded-lg flex items-center justify-center transition-all cursor-pointer relative ${
+                activeSidebar === "n8n"
+                  ? "bg-orange-500/15 border border-orange-500 text-orange-400"
+                  : "text-[#8B949E] hover:text-[#E0E0E0] hover:bg-[#161B22] border border-transparent"
+              }`}
+              title="n8n & External API Guide"
+            >
+              <span className="text-xl">⚡</span>
+              {activeSidebar === "n8n" && (
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-4 bg-orange-500 rounded-l-md" />
+              )}
+            </button>
+
+            <button
               id="sidebar-logs-tab"
               onClick={() => {
                 setActiveSidebar("settings");
@@ -814,14 +850,22 @@ export default function App() {
 
         {/* Dashboard workspace core view */}
         <main className="flex-1 flex flex-col md:flex-row overflow-hidden bg-[#090B0E]">
-          
-          {/* Middle view: Chat area (occupies left on wide displays, or full when tabbed) */}
-          <div className={`flex-1 flex flex-col p-4 overflow-hidden h-full ${
-            activeSidebar !== "chat" ? "hidden md:flex" : "flex"
-          }`}>
-            <ChatPanel 
-              messages={messages} 
-              onSendMessage={handleSendMessage} 
+          {activeSidebar === "n8n" ? (
+            <div className="flex-1 flex flex-col h-full overflow-hidden">
+              <N8nIntegrationPanel 
+                onClose={() => setActiveSidebar("chat")}
+                onAddLog={addLog}
+              />
+            </div>
+          ) : (
+            <>
+              {/* Middle view: Chat area (occupies left on wide displays, or full when tabbed) */}
+              <div className={`flex-1 flex flex-col p-4 overflow-hidden h-full ${
+                activeSidebar !== "chat" ? "hidden md:flex" : "flex"
+              }`}>
+                <ChatPanel 
+                  messages={messages} 
+                  onSendMessage={handleSendMessage} 
               isPending={isPending} 
               onUploadCsvFile={processCsvContent}
               apiError={apiError}
@@ -1116,7 +1160,9 @@ export default function App() {
             </div>
 
           </div>
-        </main>
+        </>
+      )}
+    </main>
       </div>
 
       {/* Bottom Footer Terminal - Height 120px with Scrolling Server output */}
